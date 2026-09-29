@@ -2,8 +2,9 @@ import Foundation
 
 @main
 struct FreeFlowTests {
-    static func main() {
+    static func main() async {
         AppContextServiceTests.run()
+        await LLMAPITransportTests.run()
         ModelConfigurationTests.run()
         ShortcutCoreTests.run()
         SemanticVersionTests.run()
