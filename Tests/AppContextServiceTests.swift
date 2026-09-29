@@ -7,6 +7,7 @@ enum AppContextServiceTests {
         testNonStrippingModelPreservesExistingBehavior()
         testDeprecatedGroqModelsAreNotPredefined()
         testQwenCleanupDisablesReasoning()
+        testContextRequestOmitsTemperatureAndPreservesMessages()
     }
 
     private static func testQwenRawOutputIsSummarized() {
@@ -70,5 +71,34 @@ enum AppContextServiceTests {
 
         TestSupport.expect(config.reasoningEffort == "none", "Qwen cleanup should disable reasoning")
         TestSupport.expect(config.includeReasoning == false, "Qwen cleanup should exclude reasoning output")
+    }
+
+    private static func testContextRequestOmitsTemperatureAndPreservesMessages() {
+        let screenshotMessage: [[String: Any]] = [
+            ["type": "text", "text": "Analyze the screenshot plus metadata."],
+            ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,synthetic"]]
+        ]
+        let payload = AppContextService.contextRequestPayload(
+            model: "gpt-6-luna",
+            contextSystemPrompt: "Synthetic system prompt",
+            userMessage: screenshotMessage
+        )
+        let messages = payload["messages"] as? [[String: Any]]
+        let userContent = messages?.last?["content"] as? [[String: Any]]
+
+        TestSupport.expect(payload["temperature"] == nil, "Context requests must use the provider's default sampling")
+        TestSupport.expectEqual(payload["model"] as? String, "gpt-6-luna")
+        TestSupport.expectEqual(messages?.first?["content"] as? String, "Synthetic system prompt")
+        TestSupport.expectEqual(userContent?.count, 2)
+        TestSupport.expectEqual(userContent?.last?["type"] as? String, "image_url")
+
+        let textPayload = AppContextService.contextRequestPayload(
+            model: "gpt-6-luna",
+            contextSystemPrompt: "Synthetic system prompt",
+            userMessage: "Synthetic text-only metadata"
+        )
+        let textMessages = textPayload["messages"] as? [[String: Any]]
+        TestSupport.expectEqual(textMessages?.last?["content"] as? String, "Synthetic text-only metadata")
+        TestSupport.expect(textPayload["temperature"] == nil, "Text fallback requests must also omit temperature")
     }
 }

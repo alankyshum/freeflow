@@ -254,14 +254,11 @@ Selected text: \(selectedText ?? "None")
 
             let fullPrompt = "Model: \(model)\n\n[System]\n\(contextSystemPrompt)\n[User]\n\(userMessageDescription)"
 
-            let payload: [String: Any] = [
-                "model": model,
-                "temperature": 0.2,
-                "messages": [
-                    ["role": "system", "content": contextSystemPrompt],
-                    ["role": "user", "content": userMessage]
-                ]
-            ]
+            let payload = Self.contextRequestPayload(
+                model: model,
+                contextSystemPrompt: contextSystemPrompt,
+                userMessage: userMessage
+            )
 
             request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
             let (data, response) = try await LLMAPITransport.data(for: request)
@@ -284,6 +281,20 @@ Selected text: \(selectedText ?? "None")
         } catch {
             return nil
         }
+    }
+
+    static func contextRequestPayload(
+        model: String,
+        contextSystemPrompt: String,
+        userMessage: Any
+    ) -> [String: Any] {
+        [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": contextSystemPrompt],
+                ["role": "user", "content": userMessage]
+            ]
+        ]
     }
 
     static func activitySummary(from rawContent: String, model: String) -> String? {
