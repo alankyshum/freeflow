@@ -20,6 +20,8 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/ModelConfiguration.swift \
 	Sources/TranscriptionErrorPresentationCore.swift \
 	Sources/TranscriptTextCore.swift \
+	Sources/TemperatureCapabilityCache.swift \
+	Sources/TemperatureCapabilityProbe.swift \
 	Sources/UpdateManager.swift \
 	Sources/ShortcutCore/DictationShortcutSessionController.swift \
 	Sources/ShortcutCore/ShortcutMatcher.swift \

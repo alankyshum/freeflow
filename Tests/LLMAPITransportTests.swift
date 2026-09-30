@@ -36,7 +36,7 @@ private func bodyData(_ request: URLRequest) -> Data? {
 
 enum LLMAPITransportTests {
     static func run() async {
-        func perform(_ replies: [(Int, String)], body payload: [String: Any] = ["model": "fixture", "temperature": 0, "messages": []]) async throws -> [URLRequest] {
+        func perform(_ replies: [(Int, String)], body payload: [String: Any] = ["model": "fixture", "temperature": 0, "messages": []], endpoint: String = UUID().uuidString, cache: TemperatureCapabilityCache = TemperatureCapabilityCache(defaults: UserDefaults(suiteName: "transport-\(UUID().uuidString)")!)) async throws -> [URLRequest] {
             StubLLMURLProtocol.requests = []
             var remaining = replies
             StubLLMURLProtocol.handler = { _ in
@@ -47,12 +47,12 @@ enum LLMAPITransportTests {
             configuration.protocolClasses = [StubLLMURLProtocol.self]
             let session = URLSession(configuration: configuration)
             let body = try JSONSerialization.data(withJSONObject: payload)
-            var request = URLRequest(url: URL(string: "https://provider.invalid/chat")!)
+            var request = URLRequest(url: URL(string: "https://provider.invalid/\(endpoint)/chat")!)
             request.httpMethod = "POST"
             request.setValue("Bearer synthetic-test-token", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
-            let (_, response) = try await LLMAPITransport.data(for: request, using: session)
+            let (_, response) = try await LLMAPITransport.data(for: request, using: session, cache: cache)
             session.invalidateAndCancel()
             _ = response
             return StubLLMURLProtocol.requests
@@ -92,5 +92,43 @@ enum LLMAPITransportTests {
 
         let rejectedAgain = try! await perform([(400, rejected), (400, rejected)])
         TestSupport.expect(rejectedAgain.count == 2, "Second rejection stops after one retry")
+
+        let persistentCache = TemperatureCapabilityCache(defaults: UserDefaults(suiteName: "transport-persistent-\(UUID().uuidString)")!)
+        let endpoint = UUID().uuidString
+        let first = try! await perform([(400, rejected), (200, accepted)], endpoint: endpoint, cache: persistentCache)
+        let subsequent = try! await perform([(200, accepted)], endpoint: endpoint, cache: persistentCache)
+        let omittedBody = try! JSONSerialization.jsonObject(with: bodyData(subsequent[0])!) as! [String: Any]
+        TestSupport.expect(first.count == 2 && subsequent.count == 1 && omittedBody["temperature"] == nil, "Runtime rejection is cached and subsequent call omits temperature")
+
+        let sharedEndpoint = UUID().uuidString
+        var sharedRequest = URLRequest(url: URL(string: "https://provider.invalid/\(sharedEndpoint)/chat")!)
+        sharedRequest.setValue("Bearer synthetic-test-token", forHTTPHeaderField: "Authorization")
+        sharedRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        sharedRequest.httpBody = try! JSONSerialization.data(withJSONObject: ["model": "fixture", "temperature": 0, "messages": []])
+        let lateProbeObservation = TemperatureCapabilityCache.shared.beginObservation(for: sharedRequest)
+        _ = try! await perform([(400, rejected), (200, accepted)], endpoint: sharedEndpoint, cache: TemperatureCapabilityCache.shared)
+        TemperatureCapabilityCache.shared.record(.supported, for: sharedRequest, observation: lateProbeObservation)
+        TestSupport.expect(TemperatureCapabilityCache.shared.capability(for: sharedRequest) == .unsupported, "Shared production cache ignores late successful probe after newer runtime rejection")
+
+        let supportedCache = TemperatureCapabilityCache(defaults: UserDefaults(suiteName: "transport-supported-\(UUID().uuidString)")!)
+        let supportedEndpoint = UUID().uuidString
+        let validCompletion = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"OK\"}}]}"
+        _ = try! await perform([(200, validCompletion)], endpoint: supportedEndpoint, cache: supportedCache)
+        let supportedCall = try! await perform([(200, validCompletion)], endpoint: supportedEndpoint, cache: supportedCache)
+        let supportedBody = try! JSONSerialization.jsonObject(with: bodyData(supportedCall[0])!) as! [String: Any]
+        TestSupport.expect(supportedCall.count == 1 && supportedBody["temperature"] != nil, "Successful supported response preserves temperature on later calls")
+
+        for (status, body, label) in [
+            (401, "{\"error\":{\"code\":\"invalid_api_key\",\"message\":\"bad key\"}}", "auth"),
+            (429, "{\"error\":{\"code\":\"rate_limit_exceeded\"}}", "rate limit"),
+            (400, "{\"error\":{\"code\":\"invalid_request\",\"message\":\"bad request\"}}", "unrelated 400")
+        ] {
+            let isolated = TemperatureCapabilityCache(defaults: UserDefaults(suiteName: "transport-\(label)-\(UUID().uuidString)")!)
+            let isolatedEndpoint = UUID().uuidString
+            _ = try! await perform([(status, body)], endpoint: isolatedEndpoint, cache: isolated)
+            let next = try! await perform([(200, validCompletion)], endpoint: isolatedEndpoint, cache: isolated)
+            let nextBody = try! JSONSerialization.jsonObject(with: bodyData(next[0])!) as! [String: Any]
+            TestSupport.expect(next.count == 1 && nextBody["temperature"] != nil, "\(label) errors do not poison capability cache")
+        }
     }
 }
